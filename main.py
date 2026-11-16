@@ -1,7 +1,9 @@
-import json
+import sys
 
-from call_function import available_functions
+from call_function import available_functions, call_function
 from prompts import system_prompt
+
+MAX_ITERATIONS = 20
 
 
 def main():
@@ -31,32 +33,45 @@ def main():
         {"role": "user", "content": args.user_prompt},
     ]
 
-    response = client.chat.completions.create(
-        model = "openrouter/free",
-        messages=messages,
-        tools=available_functions,
-        temperature=0,
-    )
-
-    usable = response.usage
-    if not usable:
-        raise RuntimeError("There was an error with this request")
-
     if args.verbose:
-            print(f"User prompt: {args.user_prompt}")
+        print(f"User prompt: {args.user_prompt}")
+
+    for _ in range(MAX_ITERATIONS):
+        response = client.chat.completions.create(
+            model="nvidia/nemotron-3-ultra-550b-a55b:free",
+            messages=messages,
+            tools=available_functions,
+            temperature=0,
+        )
+
+        usable = response.usage
+        if not usable:
+            raise RuntimeError("There was an error with this request")
+
+        if args.verbose:
             print(f"Prompt tokens: {usable.prompt_tokens}")
             print(f"Response tokens: {usable.completion_tokens}")
 
-    message = response.choices[0].message
-    if message.tool_calls:
+        message = response.choices[0].message
+        messages.append(message)
+
+        if not message.tool_calls:
+            print("Final response:")
+            print(message.content)
+            return message.content
+
         for tool_call in message.tool_calls:
-            function_args = json.loads(tool_call.function.arguments or "{}")
-            print(f"Calling function: {tool_call.function.name}({function_args})")
-    else:
-        print(message.content)
-    return message.content
+            result_message = call_function(tool_call, verbose=args.verbose)
+            if not result_message.get("content"):
+                raise RuntimeError(
+                    f"Function {tool_call.function.name} returned no content"
+                )
+            if args.verbose:
+                print(f"-> {result_message['content']}")
+            messages.append(result_message)
 
-
+    print(f"Error: no final response after {MAX_ITERATIONS} iterations")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
